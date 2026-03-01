@@ -1,0 +1,66 @@
+# =============================================================================
+# lazado configuration
+# https://github.com/da3az/lazado
+#
+# Location: ~/.config/lazado/config
+# Generate with: ado-init
+#
+# All values can be overridden with environment variables (LAZADO_* prefix).
+# =============================================================================
+
+# Azure DevOps organization URL
+# Example: https://dev.azure.com/MyCompany
+# Env: LAZADO_ORG
+# org=
+
+# Azure DevOps project name
+# Example: MyProject
+# Env: LAZADO_PROJECT
+# project=
+
+# Directory for cloning repos
+# Default: $HOME/dev
+# Env: LAZADO_CLONE_DIR
+# clone_dir=$HOME/dev
+
+# Branch prefix for new branches created from work items
+# Branches are created as: {prefix}/{work-item-id}-{title}
+# Default: feature
+# Env: LAZADO_BRANCH_PREFIX
+# branch_prefix=feature
+
+# Regex pattern to extract work item ID from branch names
+# Default: (?<=/)\d+  (matches digits after a slash)
+# Env: LAZADO_BRANCH_ID_PATTERN
+# branch_id_pattern=(?<=/)\d+
+
+# Default target branch for pull requests
+# Default: main
+# Env: LAZADO_DEFAULT_TARGET_BRANCH
+# default_target_branch=main
+
+# SSH URL template for cloning repositories
+# Placeholders: {org}, {project}, {repo}
+# Default: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+# Env: LAZADO_SSH_URL_TEMPLATE
+# ssh_url_template=git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+
+# Work item state cache TTL in seconds
+# Default: 86400 (24 hours)
+# Env: LAZADO_CACHE_TTL
+# cache_ttl=86400
+
+# Cache directory
+# Default: $HOME/.cache/lazado
+# Env: LAZADO_CACHE_DIR
+# cache_dir=$HOME/.cache/lazado
+
+# Browser command for opening URLs
+# Auto-detected: xdg-open (Linux) or open (macOS)
+# Env: LAZADO_BROWSER_CMD
+# browser_cmd=
+
+# Extra fzf options for the interactive navigator
+# Example: --color=16 --no-unicode
+# Env: LAZADO_FZF_OPTS
+# fzf_opts=
