@@ -16,6 +16,8 @@ ado() {
     "My User Stories" \
     "Create Work Item" \
     "Create User Story" \
+    "Update Work Item" \
+    "Update User Story" \
     "Update Item Status" \
     "Search Items" \
     "Current Branch Ticket" \
@@ -38,6 +40,8 @@ ado() {
     "My User Stories")              _lazado_nav_list_items "User Story" ;;
     "Create Work Item")             _lazado_nav_create_item "Task" ;;
     "Create User Story")            _lazado_nav_create_item "User Story" ;;
+    "Update Work Item")             _lazado_nav_update_item "Task" ;;
+    "Update User Story")            _lazado_nav_update_item "User Story" ;;
     "Update Item Status")           _lazado_nav_update_status_standalone ;;
     "Search Items")                 _lazado_nav_search ;;
     "Current Branch Ticket")        ado-wi-branch ;;
@@ -63,6 +67,7 @@ WORK ITEMS / USER STORIES:
   ado-wi-detail <id>         View work item (full detail)
   ado-wi-branch              View work item linked to current branch
   ado-wi-search <keyword>    Search work items by title
+  ado-wi-update <id>         Update work item fields (title, desc, assignment)
   ado-wi-state <id> <state>  Update work item state
 
 PULL REQUESTS:
