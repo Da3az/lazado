@@ -1,0 +1,313 @@
+package ui
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// Panel is the interface that all panels must implement.
+type Panel interface {
+	Init() tea.Cmd
+	Update(msg tea.Msg) tea.Cmd
+	View() string
+	DetailView() string
+	HelpKeys() []key.Binding
+	SetFocused(bool)
+	SetSize(w, h int)
+}
+
+// AppModel is the root BubbleTea model.
+type AppModel struct {
+	panels      map[PanelID]Panel
+	activePanel PanelID
+	tabBar      TabBar
+	statusBar   StatusBar
+	layout      Layout
+	showHelp    bool
+	ready       bool
+}
+
+// TabBar wraps the tab bar component reference (defined here to avoid circular import).
+type TabBar struct {
+	tabs   []string
+	active int
+	width  int
+}
+
+// StatusBar wraps the status bar state.
+type StatusBar struct {
+	org     string
+	project string
+	branch  string
+	message string
+	isError bool
+	width   int
+}
+
+// NewAppModel creates the root model.
+func NewAppModel(panels map[PanelID]Panel, org, project, branch string) *AppModel {
+	tabs := []string{
+		PanelNames[PanelWorkItems],
+		PanelNames[PanelPullRequests],
+		PanelNames[PanelPipelines],
+		PanelNames[PanelRepos],
+	}
+	return &AppModel{
+		panels:      panels,
+		activePanel: PanelWorkItems,
+		tabBar:      TabBar{tabs: tabs, active: 0},
+		statusBar: StatusBar{
+			org:     org,
+			project: project,
+			branch:  branch,
+		},
+	}
+}
+
+// Init initializes all panels.
+func (m *AppModel) Init() tea.Cmd {
+	var cmds []tea.Cmd
+	for _, panel := range m.panels {
+		cmds = append(cmds, panel.Init())
+	}
+	// Focus the active panel
+	if p, ok := m.panels[m.activePanel]; ok {
+		p.SetFocused(true)
+	}
+	return tea.Batch(cmds...)
+}
+
+// Update handles messages.
+func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.layout = CalculateLayout(msg.Width, msg.Height)
+		m.tabBar.width = msg.Width
+		m.statusBar.width = msg.Width
+		m.ready = true
+		// Propagate size to all panels
+		for _, panel := range m.panels {
+			panel.SetSize(msg.Width, msg.Height)
+		}
+		return m, nil
+
+	case tea.KeyMsg:
+		// Global keybindings take priority
+		cmd := m.handleGlobalKey(msg)
+		if cmd != nil {
+			return m, cmd
+		}
+
+		// Delegate to active panel
+		if panel, ok := m.panels[m.activePanel]; ok {
+			return m, panel.Update(msg)
+		}
+
+	case StatusMsg:
+		m.statusBar.message = msg.Text
+		m.statusBar.isError = msg.IsError
+		return m, nil
+
+	default:
+		// Delegate non-key messages to all panels
+		var cmds []tea.Cmd
+		for _, panel := range m.panels {
+			cmds = append(cmds, panel.Update(msg))
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	return m, nil
+}
+
+func (m *AppModel) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, Keys.Quit):
+		if m.showHelp {
+			m.showHelp = false
+			return nil
+		}
+		return tea.Quit
+	case key.Matches(msg, Keys.Help):
+		m.showHelp = !m.showHelp
+		return nil
+	case key.Matches(msg, Keys.Panel1):
+		return m.switchPanel(PanelWorkItems)
+	case key.Matches(msg, Keys.Panel2):
+		return m.switchPanel(PanelPullRequests)
+	case key.Matches(msg, Keys.Panel3):
+		return m.switchPanel(PanelPipelines)
+	case key.Matches(msg, Keys.Panel4):
+		return m.switchPanel(PanelRepos)
+	case key.Matches(msg, Keys.Tab):
+		next := PanelID((int(m.activePanel) + 1) % len(m.panels))
+		return m.switchPanel(next)
+	case key.Matches(msg, Keys.ShiftTab):
+		prev := PanelID((int(m.activePanel) - 1 + len(m.panels)) % len(m.panels))
+		return m.switchPanel(prev)
+	}
+	return nil
+}
+
+func (m *AppModel) switchPanel(id PanelID) tea.Cmd {
+	if _, ok := m.panels[id]; !ok {
+		return nil
+	}
+	// Unfocus current
+	if p, ok := m.panels[m.activePanel]; ok {
+		p.SetFocused(false)
+	}
+	m.activePanel = id
+	m.tabBar.active = int(id)
+	// Focus new
+	if p, ok := m.panels[id]; ok {
+		p.SetFocused(true)
+	}
+	// Clear status message on panel switch
+	m.statusBar.message = ""
+	return nil
+}
+
+// View renders the full UI.
+func (m *AppModel) View() string {
+	if !m.ready {
+		return "Loading..."
+	}
+
+	if m.showHelp {
+		return m.renderHelp()
+	}
+
+	var sections []string
+
+	// Tab bar
+	sections = append(sections, m.renderTabBar())
+
+	// Content: list panel + detail panel
+	panel, ok := m.panels[m.activePanel]
+	if !ok {
+		sections = append(sections, "No panel")
+	} else {
+		listContent := panel.View()
+		detailContent := panel.DetailView()
+
+		// Apply border styles
+		listStyle := InactiveBorderStyle
+		if true { // list is always "active" in the current panel
+			listStyle = ActiveBorderStyle
+		}
+		listBox := listStyle.
+			Width(m.layout.ListWidth - 2).
+			Height(m.layout.ContentHeight).
+			Render(listContent)
+
+		detailBox := InactiveBorderStyle.
+			Width(m.layout.DetailWidth - 2).
+			Height(m.layout.ContentHeight).
+			Render(detailContent)
+
+		content := lipgloss.JoinHorizontal(lipgloss.Top, listBox, detailBox)
+		sections = append(sections, content)
+	}
+
+	// Status bar
+	sections = append(sections, m.renderStatusBar())
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (m *AppModel) renderTabBar() string {
+	var tabs []string
+	for i, tab := range m.tabBar.tabs {
+		label := "[" + string(rune('1'+i)) + "] " + tab
+		if i == m.tabBar.active {
+			tabs = append(tabs, ActiveTabStyle.Render(label))
+		} else {
+			tabs = append(tabs, InactiveTabStyle.Render(label))
+		}
+	}
+	row := strings.Join(tabs, "")
+	return TabBarStyle.Width(m.tabBar.width).Render(row)
+}
+
+func (m *AppModel) renderStatusBar() string {
+	left := " lazado"
+	if m.statusBar.org != "" {
+		// Extract org name from URL
+		org := m.statusBar.org
+		parts := strings.Split(strings.TrimRight(org, "/"), "/")
+		if len(parts) > 0 {
+			org = parts[len(parts)-1]
+		}
+		left += "  │  " + org + "/" + m.statusBar.project
+	}
+	if m.statusBar.branch != "" {
+		left += "  │  " + m.statusBar.branch
+	}
+
+	right := " ? help "
+	if m.statusBar.message != "" {
+		if m.statusBar.isError {
+			right = " " + ErrorStyle.Render(m.statusBar.message) + " "
+		} else {
+			right = " " + SuccessStyle.Render(m.statusBar.message) + " "
+		}
+	}
+
+	gap := m.statusBar.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
+	}
+
+	bar := left + strings.Repeat(" ", gap) + right
+	return StatusBarStyle.Width(m.statusBar.width).Render(bar)
+}
+
+func (m *AppModel) renderHelp() string {
+	var b strings.Builder
+	b.WriteString(TitleStyle.Render("lazado — Keybindings"))
+	b.WriteString("\n\n")
+
+	// Global keys
+	b.WriteString(TitleStyle.Render("Global"))
+	b.WriteString("\n")
+	globalBindings := []key.Binding{
+		Keys.Quit, Keys.Tab, Keys.Panel1, Keys.Panel2,
+		Keys.Panel3, Keys.Panel4, Keys.Help, Keys.Refresh, Keys.Search,
+	}
+	for _, k := range globalBindings {
+		help := k.Help()
+		b.WriteString(HelpKeyStyle.Render("  "+help.Key) + "  " + HelpDescStyle.Render(help.Desc) + "\n")
+	}
+
+	// Navigation
+	b.WriteString("\n")
+	b.WriteString(TitleStyle.Render("Navigation"))
+	b.WriteString("\n")
+	navBindings := []key.Binding{
+		ListNav.Up, ListNav.Down, ListNav.Top, ListNav.Bottom, ListNav.Enter,
+	}
+	for _, k := range navBindings {
+		help := k.Help()
+		b.WriteString(HelpKeyStyle.Render("  "+help.Key) + "  " + HelpDescStyle.Render(help.Desc) + "\n")
+	}
+
+	// Panel-specific keys
+	if panel, ok := m.panels[m.activePanel]; ok {
+		b.WriteString("\n")
+		b.WriteString(TitleStyle.Render(PanelNames[m.activePanel]))
+		b.WriteString("\n")
+		for _, k := range panel.HelpKeys() {
+			help := k.Help()
+			b.WriteString(HelpKeyStyle.Render("  "+help.Key) + "  " + HelpDescStyle.Render(help.Desc) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(DimStyle.Render("Press ? to close"))
+
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
