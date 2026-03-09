@@ -77,7 +77,7 @@ _lazado_fetch_states() {
   encoded_type=$(printf '%s' "$work_item_type" | sed 's/ /%20/g')
 
   az rest --method get \
-    --uri "${org}/${project}/_apis/wit/workitemtypes/${encoded_type}/states?api-version=7.1" \
+    --uri "${org}/${project}/_apis/wit/workitemtypes/${encoded_type}/states?api-version=7.1-preview" \
     2>/dev/null | jq '[.value[] | {name: .name, category: .category}]' 2>/dev/null
 }
 

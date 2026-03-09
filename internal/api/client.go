@@ -63,7 +63,7 @@ func (c *Client) ValidateConnection(ctx context.Context) (*ConnectionData, error
 	return &result, nil
 }
 
-const apiVersion = "7.1"
+const apiVersion = "7.1-preview"
 
 func (c *Client) projectURL(path string) string {
 	return fmt.Sprintf("%s/%s/%s", c.baseURL, c.project, path)
