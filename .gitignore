@@ -15,3 +15,6 @@ Thumbs.db
 # Go build
 build/
 dist/
+
+# Claude Code
+.claude/
