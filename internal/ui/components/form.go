@@ -86,15 +86,7 @@ func (f *Form) Update(msg tea.Msg) tea.Cmd {
 		case "shift+tab", "up":
 			f.cursor = (f.cursor - 1 + len(f.inputs)) % len(f.inputs)
 			return f.focusCurrent()
-		case "enter":
-			// If on last field, submit
-			if f.cursor == len(f.inputs)-1 {
-				return f.submit()
-			}
-			// Otherwise move to next field
-			f.cursor = (f.cursor + 1) % len(f.inputs)
-			return f.focusCurrent()
-		case "ctrl+s":
+		case "enter", "ctrl+s":
 			return f.submit()
 		}
 	}
@@ -120,7 +112,7 @@ func (f *Form) View() string {
 		b.WriteString("\n\n")
 	}
 
-	help := ui.DimStyle.Render("tab: next field • ctrl+s: submit • esc: cancel")
+	help := ui.DimStyle.Render("tab: next field • enter: submit • esc: cancel")
 	b.WriteString(help)
 
 	// Center the form in a box

@@ -36,9 +36,15 @@ type PipelinesPanel struct {
 
 // NewPipelinesPanel creates the pipelines panel.
 func NewPipelinesPanel(client *api.Client) *PipelinesPanel {
+	list := components.NewList("Pipelines")
+	list.SetColumns([]components.ColumnDef{
+		{Field: "ID", MinWidth: 8},
+		{Field: "Subtitle", MinWidth: 12},
+		{Field: "Title", Flex: true},
+	})
 	return &PipelinesPanel{
 		client: client,
-		list:   components.NewList("Pipelines"),
+		list:   list,
 		detail: components.NewDetailView(),
 	}
 }
@@ -59,8 +65,8 @@ func (p *PipelinesPanel) SetSize(w, h int) {
 	p.width = w
 	p.height = h
 	layout := ui.CalculateLayout(w, h)
-	p.list.SetSize(layout.ListWidth-2, layout.ContentHeight)
-	p.detail.SetSize(layout.DetailWidth-2, layout.ContentHeight)
+	p.list.SetSize(layout.ListWidth-layout.HFrame, layout.ContentHeight)
+	p.detail.SetSize(layout.DetailWidth-layout.HFrame, layout.ContentHeight)
 }
 
 // Update handles messages.
@@ -121,6 +127,11 @@ func (p *PipelinesPanel) View() string {
 // DetailView returns the detail pane.
 func (p *PipelinesPanel) DetailView() string {
 	return p.detail.View()
+}
+
+// HasActiveOverlay returns true when a modal overlay is open.
+func (p *PipelinesPanel) HasActiveOverlay() bool {
+	return false
 }
 
 // HelpKeys returns context keybindings.

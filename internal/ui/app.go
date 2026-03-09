@@ -15,6 +15,7 @@ type Panel interface {
 	View() string
 	DetailView() string
 	HelpKeys() []key.Binding
+	HasActiveOverlay() bool
 	SetFocused(bool)
 	SetSize(w, h int)
 }
@@ -95,6 +96,16 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// When a panel overlay (form/confirm/search) is active,
+		// skip global keybindings and delegate directly to the panel.
+		// Only ctrl+c is allowed to quit globally.
+		if panel, ok := m.panels[m.activePanel]; ok && panel.HasActiveOverlay() {
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			return m, panel.Update(msg)
+		}
+
 		// Global keybindings take priority
 		cmd := m.handleGlobalKey(msg)
 		if cmd != nil {
@@ -197,18 +208,14 @@ func (m *AppModel) View() string {
 		listContent := panel.View()
 		detailContent := panel.DetailView()
 
-		// Apply border styles
-		listStyle := InactiveBorderStyle
-		if true { // list is always "active" in the current panel
-			listStyle = ActiveBorderStyle
-		}
-		listBox := listStyle.
-			Width(m.layout.ListWidth - 2).
+		// Apply border styles using dynamic frame sizes
+		listBox := ActiveBorderStyle.
+			Width(m.layout.ListWidth - m.layout.HFrame).
 			Height(m.layout.ContentHeight).
 			Render(listContent)
 
 		detailBox := InactiveBorderStyle.
-			Width(m.layout.DetailWidth - 2).
+			Width(m.layout.DetailWidth - m.layout.HFrame).
 			Height(m.layout.ContentHeight).
 			Render(detailContent)
 
@@ -238,14 +245,15 @@ func (m *AppModel) View() string {
 func (m *AppModel) renderTabBar() string {
 	var tabs []string
 	for i, tab := range m.tabBar.tabs {
-		label := "[" + string(rune('1'+i)) + "] " + tab
+		label := " (" + string(rune('1'+i)) + ") " + tab + " "
 		if i == m.tabBar.active {
 			tabs = append(tabs, ActiveTabStyle.Render(label))
 		} else {
 			tabs = append(tabs, InactiveTabStyle.Render(label))
 		}
 	}
-	row := strings.Join(tabs, "")
+	sep := DimStyle.Render(" │ ")
+	row := strings.Join(tabs, sep)
 	return TabBarStyle.Width(m.tabBar.width).Render(row)
 }
 

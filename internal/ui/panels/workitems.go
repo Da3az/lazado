@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/da3az/lazado/internal/api"
 	"github.com/da3az/lazado/internal/ui"
@@ -24,6 +25,7 @@ type wiKeys struct {
 	Browser     key.Binding
 	Filter      key.Binding
 	TypeFilter  key.Binding
+	ToggleMine  key.Binding
 }
 
 var wiKeyMap = wiKeys{
@@ -36,30 +38,31 @@ var wiKeyMap = wiKeys{
 	Browser:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "open in browser")),
 	Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter state")),
 	TypeFilter:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "filter type")),
+	ToggleMine:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "mine / all")),
 }
 
-type stateFilter int
-
-const (
-	filterActive stateFilter = iota
-	filterClosed
-	filterAll
-)
+// Default state filters
+var defaultStateFilters = []string{"All", "New", "Active", "Resolved", "Closed", "Done", "Removed"}
 
 // WorkItemsPanel manages the work items view.
 type WorkItemsPanel struct {
-	client    *api.Client
-	list      *components.List
-	detail    *components.DetailView
-	items     []api.WorkItem
-	focused   bool
-	width     int
-	height    int
+	client  *api.Client
+	list    *components.List
+	detail  *components.DetailView
+	items   []api.WorkItem
+	focused bool
+	width   int
+	height  int
 
 	// Filters
-	stateFilter stateFilter
-	typeFilter  string // "" means all types
-	wiTypes     []string
+	stateFilters  []string // available state filter options
+	stateFilterIdx int     // index into stateFilters
+	typeFilter    string   // "" means all types
+	wiTypes       []string
+	myItems       bool // true = assigned to me, false = all items
+
+	// Search
+	searchQuery string
 
 	// Overlay state
 	form    *components.Form
@@ -69,19 +72,27 @@ type WorkItemsPanel struct {
 
 // NewWorkItemsPanel creates the work items panel.
 func NewWorkItemsPanel(client *api.Client) *WorkItemsPanel {
+	list := components.NewList("Work Items")
+	list.SetColumns([]components.ColumnDef{
+		{Field: "ID", MinWidth: 10},
+		{Field: "Subtitle", MinWidth: 20},
+		{Field: "Title", Flex: true},
+	})
 	return &WorkItemsPanel{
-		client:     client,
-		list:       components.NewList("Work Items"),
-		detail:     components.NewDetailView(),
-		search:     components.NewSearch(),
-		stateFilter: filterActive,
-		wiTypes:    []string{"Task", "User Story", "Bug", "Epic", "Feature"},
+		client:        client,
+		list:          list,
+		detail:        components.NewDetailView(),
+		search:        components.NewSearch(),
+		stateFilters:  defaultStateFilters,
+		stateFilterIdx: 0, // "All" initially — but will load on first refresh
+		wiTypes:       []string{"Task", "User Story", "Bug", "Epic", "Feature"},
+		myItems:       true,
 	}
 }
 
 // Init loads initial data.
 func (p *WorkItemsPanel) Init() tea.Cmd {
-	return p.loadItems()
+	return tea.Batch(p.loadItems(), p.loadStates())
 }
 
 // SetFocused sets panel focus state.
@@ -95,8 +106,8 @@ func (p *WorkItemsPanel) SetSize(w, h int) {
 	p.width = w
 	p.height = h
 	layout := ui.CalculateLayout(w, h)
-	p.list.SetSize(layout.ListWidth-2, layout.ContentHeight)
-	p.detail.SetSize(layout.DetailWidth-2, layout.ContentHeight)
+	p.list.SetSize(layout.ListWidth-layout.HFrame, layout.ContentHeight)
+	p.detail.SetSize(layout.DetailWidth-layout.HFrame, layout.ContentHeight)
 	p.search.SetWidth(w)
 }
 
@@ -122,6 +133,21 @@ func (p *WorkItemsPanel) Update(msg tea.Msg) tea.Cmd {
 		p.items = msg.Items
 		p.list.SetItems(p.toListItems(msg.Items))
 		p.updateDetail()
+		return nil
+
+	case ui.StatesLoadedMsg:
+		if msg.Err == nil && len(msg.States) > 0 {
+			// Build unique state names
+			seen := map[string]bool{}
+			states := []string{"All"}
+			for _, s := range msg.States {
+				if !seen[s.Name] {
+					seen[s.Name] = true
+					states = append(states, s.Name)
+				}
+			}
+			p.stateFilters = states
+		}
 		return nil
 
 	case ui.WorkItemUpdatedMsg:
@@ -155,9 +181,15 @@ func (p *WorkItemsPanel) Update(msg tea.Msg) tea.Cmd {
 
 	case components.SearchSubmitMsg:
 		if msg.Query != "" {
+			p.searchQuery = msg.Query
 			return p.searchItems(msg.Query)
 		}
+		p.searchQuery = ""
 		return nil
+
+	case components.SearchCancelMsg:
+		p.searchQuery = ""
+		return p.loadItems()
 
 	case tea.KeyMsg:
 		return p.handleKey(msg)
@@ -191,9 +223,12 @@ func (p *WorkItemsPanel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return p.cycleStateFilter()
 	case key.Matches(msg, wiKeyMap.TypeFilter):
 		return p.cycleTypeFilter()
+	case key.Matches(msg, wiKeyMap.ToggleMine):
+		return p.toggleMyItems()
 	case key.Matches(msg, ui.Keys.Search):
 		return p.search.Open()
 	case key.Matches(msg, ui.Keys.Refresh):
+		p.searchQuery = ""
 		return p.loadItems()
 	}
 
@@ -223,41 +258,64 @@ func (p *WorkItemsPanel) DetailView() string {
 	return p.detail.View()
 }
 
+// HasActiveOverlay returns true when a form, confirm, or search is open.
+func (p *WorkItemsPanel) HasActiveOverlay() bool {
+	return p.form != nil || p.confirm != nil || p.search.Active()
+}
+
 // HelpKeys returns context-sensitive keybindings for the help bar.
 func (p *WorkItemsPanel) HelpKeys() []key.Binding {
 	return []key.Binding{
 		wiKeyMap.Create, wiKeyMap.ChangeState, wiKeyMap.Edit,
 		wiKeyMap.Assign, wiKeyMap.Filter, wiKeyMap.TypeFilter,
-		wiKeyMap.Browser,
+		wiKeyMap.ToggleMine, wiKeyMap.Browser,
 	}
+}
+
+// currentStateFilter returns the current state filter string.
+func (p *WorkItemsPanel) currentStateFilter() string {
+	if p.stateFilterIdx >= 0 && p.stateFilterIdx < len(p.stateFilters) {
+		return p.stateFilters[p.stateFilterIdx]
+	}
+	return "All"
 }
 
 // FilterLabel returns a description of the current filter.
 func (p *WorkItemsPanel) FilterLabel() string {
-	var state string
-	switch p.stateFilter {
-	case filterActive:
-		state = "Active"
-	case filterClosed:
-		state = "Closed"
-	case filterAll:
-		state = "All"
+	state := p.currentStateFilter()
+	scope := "Mine"
+	if !p.myItems {
+		scope = "All"
 	}
+	label := state + " / " + scope
 	if p.typeFilter != "" {
-		return state + " / " + p.typeFilter
+		label += " / " + p.typeFilter
 	}
-	return state
+	if p.searchQuery != "" {
+		label += " / Search: " + p.searchQuery
+	}
+	return label
 }
 
 // --- Data loading ---
 
+func (p *WorkItemsPanel) loadStates() tea.Cmd {
+	client := p.client
+	return func() tea.Msg {
+		// Fetch states for Task type as representative
+		states, err := client.GetWorkItemTypeStates(context.Background(), "Task")
+		return ui.StatesLoadedMsg{Type: "Task", States: states, Err: err}
+	}
+}
+
 func (p *WorkItemsPanel) loadItems() tea.Cmd {
 	p.list.SetLoading(true)
 	client := p.client
-	sf := p.stateFilter
+	sf := p.currentStateFilter()
 	tf := p.typeFilter
+	myItems := p.myItems
 	return func() tea.Msg {
-		wiql := p.buildQuery(sf, tf)
+		wiql := buildQuery(sf, tf, myItems, "")
 		items, err := client.QueryWorkItems(context.Background(), wiql)
 		return ui.WorkItemsLoadedMsg{Items: items, Err: err}
 	}
@@ -266,46 +324,43 @@ func (p *WorkItemsPanel) loadItems() tea.Cmd {
 func (p *WorkItemsPanel) searchItems(query string) tea.Cmd {
 	p.list.SetLoading(true)
 	client := p.client
+	sf := p.currentStateFilter()
+	tf := p.typeFilter
+	myItems := p.myItems
 	return func() tea.Msg {
-		wiql := api.NewWIQL().
-			Select("System.Id", "System.Title", "System.State", "System.WorkItemType", "System.AssignedTo").
-			Where(api.And(
-				api.EqMe("System.AssignedTo"),
-				api.Contains("System.Title", query),
-			)).
-			OrderByDesc("System.CreatedDate").
-			Build()
+		wiql := buildQuery(sf, tf, myItems, query)
 		items, err := client.QueryWorkItems(context.Background(), wiql)
 		return ui.WorkItemsLoadedMsg{Items: items, Err: err}
 	}
 }
 
-func (p *WorkItemsPanel) buildQuery(sf stateFilter, tf string) string {
-	conditions := []string{api.EqMe("System.AssignedTo")}
+func buildQuery(stateFilter, typeFilter string, myItems bool, searchQuery string) string {
+	var conditions []string
 
-	switch sf {
-	case filterActive:
-		conditions = append(conditions, api.Or(
-			api.Eq("System.State", "New"),
-			api.Eq("System.State", "Active"),
-		))
-	case filterClosed:
-		conditions = append(conditions, api.Or(
-			api.Eq("System.State", "Closed"),
-			api.Eq("System.State", "Resolved"),
-			api.Eq("System.State", "Done"),
-		))
+	if myItems {
+		conditions = append(conditions, api.EqMe("System.AssignedTo"))
 	}
 
-	if tf != "" {
-		conditions = append(conditions, api.Eq("System.WorkItemType", tf))
+	if stateFilter != "" && stateFilter != "All" {
+		conditions = append(conditions, api.Eq("System.State", stateFilter))
 	}
 
-	return api.NewWIQL().
-		Select("System.Id", "System.Title", "System.State", "System.WorkItemType", "System.AssignedTo").
-		Where(api.And(conditions...)).
-		OrderByDesc("System.CreatedDate").
-		Build()
+	if typeFilter != "" {
+		conditions = append(conditions, api.Eq("System.WorkItemType", typeFilter))
+	}
+
+	if searchQuery != "" {
+		conditions = append(conditions, api.Contains("System.Title", searchQuery))
+	}
+
+	q := api.NewWIQL().
+		Select("System.Id", "System.Title", "System.State", "System.WorkItemType", "System.AssignedTo")
+
+	if len(conditions) > 0 {
+		q = q.Where(api.And(conditions...))
+	}
+
+	return q.OrderByDesc("System.CreatedDate").Build()
 }
 
 // --- Conversions ---
@@ -316,7 +371,7 @@ func (p *WorkItemsPanel) toListItems(items []api.WorkItem) []components.ListItem
 		result[i] = components.ListItem{
 			ID:       fmt.Sprintf("#%d", wi.ID),
 			Title:    wi.Title(),
-			Subtitle: ui.StateStyle(wi.State()).Render(utils.PadRight(wi.State(), 10)),
+			Subtitle: ui.StateStyle(wi.State()).Render(wi.State()),
 		}
 	}
 	return result
@@ -344,7 +399,54 @@ func (p *WorkItemsPanel) updateDetail() {
 	)
 }
 
-// --- Actions ---
+// --- Filter actions ---
+
+func (p *WorkItemsPanel) cycleStateFilter() tea.Cmd {
+	p.stateFilterIdx = (p.stateFilterIdx + 1) % len(p.stateFilters)
+	return tea.Batch(
+		statusCmd("Filter: "+p.currentStateFilter(), false),
+		p.loadItems(),
+	)
+}
+
+func (p *WorkItemsPanel) cycleTypeFilter() tea.Cmd {
+	if p.typeFilter == "" {
+		p.typeFilter = p.wiTypes[0]
+	} else {
+		for i, t := range p.wiTypes {
+			if t == p.typeFilter {
+				if i == len(p.wiTypes)-1 {
+					p.typeFilter = ""
+				} else {
+					p.typeFilter = p.wiTypes[i+1]
+				}
+				break
+			}
+		}
+	}
+	label := "All types"
+	if p.typeFilter != "" {
+		label = p.typeFilter
+	}
+	return tea.Batch(
+		statusCmd("Type: "+label, false),
+		p.loadItems(),
+	)
+}
+
+func (p *WorkItemsPanel) toggleMyItems() tea.Cmd {
+	p.myItems = !p.myItems
+	scope := "My Items"
+	if !p.myItems {
+		scope = "All Items"
+	}
+	return tea.Batch(
+		statusCmd("Scope: "+scope, false),
+		p.loadItems(),
+	)
+}
+
+// --- Form actions ---
 
 func (p *WorkItemsPanel) showCreateForm() tea.Cmd {
 	p.form = components.NewForm("create-wi", "Create Work Item", []components.FormField{
@@ -362,8 +464,20 @@ func (p *WorkItemsPanel) showEditForm() tea.Cmd {
 		return nil
 	}
 	wi := p.items[idx]
+
+	// Build available states hint
+	statesHint := ""
+	if len(p.stateFilters) > 1 {
+		statesHint = strings.Join(p.stateFilters[1:], ", ") // skip "All"
+	}
+
 	p.form = components.NewForm("edit-wi", fmt.Sprintf("Edit #%d", wi.ID), []components.FormField{
 		{Label: "Title", Value: wi.Title()},
+		{Label: "State", Value: wi.State(), Placeholder: statesHint},
+		{Label: "Assigned To", Value: wi.AssignedTo()},
+		{Label: "Area Path", Value: wi.AreaPath()},
+		{Label: "Iteration", Value: wi.IterationPath()},
+		{Label: "Tags", Value: wi.Tags()},
 		{Label: "Description", Value: utils.StripHTML(wi.Description())},
 	})
 	p.form.SetSize(p.width, p.height)
@@ -376,8 +490,14 @@ func (p *WorkItemsPanel) showStateForm() tea.Cmd {
 		return nil
 	}
 	wi := p.items[idx]
+
+	statesHint := ""
+	if len(p.stateFilters) > 1 {
+		statesHint = strings.Join(p.stateFilters[1:], ", ")
+	}
+
 	p.form = components.NewForm("state-wi", fmt.Sprintf("Change State for #%d", wi.ID), []components.FormField{
-		{Label: "State", Placeholder: "New, Active, Resolved, Closed", Value: wi.State()},
+		{Label: "State", Placeholder: statesHint, Value: wi.State()},
 	})
 	p.form.SetSize(p.width, p.height)
 	return nil
@@ -415,22 +535,7 @@ func (p *WorkItemsPanel) handleFormSubmit(msg components.FormSubmitMsg) tea.Cmd 
 			return nil
 		}
 		wi := p.items[idx]
-		title := msg.Values["Title"]
-		desc := msg.Values["Description"]
-		return func() tea.Msg {
-			var ops []api.PatchOperation
-			if title != "" && title != wi.Title() {
-				ops = append(ops, api.PatchOperation{Op: "replace", Path: "/fields/System.Title", Value: title})
-			}
-			if desc != utils.StripHTML(wi.Description()) {
-				ops = append(ops, api.PatchOperation{Op: "replace", Path: "/fields/System.Description", Value: desc})
-			}
-			if len(ops) == 0 {
-				return ui.WorkItemUpdatedMsg{}
-			}
-			item, err := client.UpdateWorkItem(context.Background(), wi.ID, ops)
-			return ui.WorkItemUpdatedMsg{Item: item, Err: err}
-		}
+		return p.submitEditForm(wi, msg.Values)
 
 	case "state-wi":
 		idx := p.list.SelectedIndex()
@@ -454,6 +559,49 @@ func (p *WorkItemsPanel) handleFormSubmit(msg components.FormSubmitMsg) tea.Cmd 
 	return nil
 }
 
+func (p *WorkItemsPanel) submitEditForm(wi api.WorkItem, values map[string]string) tea.Cmd {
+	client := p.client
+	wiID := wi.ID
+
+	// Field mappings: form label -> Azure DevOps field path
+	fieldMap := map[string]struct {
+		path   string
+		oldVal string
+	}{
+		"Title":       {path: "/fields/System.Title", oldVal: wi.Title()},
+		"State":       {path: "/fields/System.State", oldVal: wi.State()},
+		"Assigned To": {path: "/fields/System.AssignedTo", oldVal: wi.AssignedTo()},
+		"Area Path":   {path: "/fields/System.AreaPath", oldVal: wi.AreaPath()},
+		"Iteration":   {path: "/fields/System.IterationPath", oldVal: wi.IterationPath()},
+		"Tags":        {path: "/fields/System.Tags", oldVal: wi.Tags()},
+		"Description": {path: "/fields/System.Description", oldVal: utils.StripHTML(wi.Description())},
+	}
+
+	return func() tea.Msg {
+		var ops []api.PatchOperation
+		for label, fm := range fieldMap {
+			newVal, ok := values[label]
+			if !ok {
+				continue
+			}
+			if newVal != fm.oldVal {
+				ops = append(ops, api.PatchOperation{
+					Op:    "replace",
+					Path:  fm.path,
+					Value: newVal,
+				})
+			}
+		}
+		if len(ops) == 0 {
+			return ui.WorkItemUpdatedMsg{}
+		}
+		item, err := client.UpdateWorkItem(context.Background(), wiID, ops)
+		return ui.WorkItemUpdatedMsg{Item: item, Err: err}
+	}
+}
+
+// --- Other actions ---
+
 func (p *WorkItemsPanel) assignToMe() tea.Cmd {
 	idx := p.list.SelectedIndex()
 	if idx < 0 || idx >= len(p.items) {
@@ -463,10 +611,8 @@ func (p *WorkItemsPanel) assignToMe() tea.Cmd {
 	client := p.client
 	return func() tea.Msg {
 		ops := []api.PatchOperation{
-			{Op: "replace", Path: "/fields/System.AssignedTo", Value: ""},
+			{Op: "replace", Path: "/fields/System.AssignedTo", Value: "@Me"},
 		}
-		// Use @Me - Azure DevOps resolves this to the authenticated user
-		ops[0].Value = "@Me"
 		item, err := client.UpdateWorkItem(context.Background(), wi.ID, ops)
 		return ui.WorkItemUpdatedMsg{Item: item, Err: err}
 	}
@@ -497,29 +643,6 @@ func (p *WorkItemsPanel) openInBrowser() tea.Cmd {
 	url := fmt.Sprintf("%s/%s/_workitems/edit/%d", p.client.BaseURL(), p.client.Project(), wi.ID)
 	utils.OpenBrowser(url, "")
 	return nil
-}
-
-func (p *WorkItemsPanel) cycleStateFilter() tea.Cmd {
-	p.stateFilter = (p.stateFilter + 1) % 3
-	return p.loadItems()
-}
-
-func (p *WorkItemsPanel) cycleTypeFilter() tea.Cmd {
-	if p.typeFilter == "" {
-		p.typeFilter = p.wiTypes[0]
-	} else {
-		for i, t := range p.wiTypes {
-			if t == p.typeFilter {
-				if i == len(p.wiTypes)-1 {
-					p.typeFilter = ""
-				} else {
-					p.typeFilter = p.wiTypes[i+1]
-				}
-				break
-			}
-		}
-	}
-	return p.loadItems()
 }
 
 func (p *WorkItemsPanel) updateForm(msg tea.Msg) tea.Cmd {

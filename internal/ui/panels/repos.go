@@ -39,11 +39,16 @@ type ReposPanel struct {
 
 // NewReposPanel creates the repos panel.
 func NewReposPanel(client *api.Client, g *gitpkg.Git, cloneDir string) *ReposPanel {
+	list := components.NewList("Repositories")
+	list.SetColumns([]components.ColumnDef{
+		{Field: "Subtitle", MinWidth: 20},
+		{Field: "Title", Flex: true},
+	})
 	return &ReposPanel{
 		client:   client,
 		git:      g,
 		cloneDir: cloneDir,
-		list:     components.NewList("Repositories"),
+		list:     list,
 		detail:   components.NewDetailView(),
 	}
 }
@@ -64,8 +69,8 @@ func (p *ReposPanel) SetSize(w, h int) {
 	p.width = w
 	p.height = h
 	layout := ui.CalculateLayout(w, h)
-	p.list.SetSize(layout.ListWidth-2, layout.ContentHeight)
-	p.detail.SetSize(layout.DetailWidth-2, layout.ContentHeight)
+	p.list.SetSize(layout.ListWidth-layout.HFrame, layout.ContentHeight)
+	p.detail.SetSize(layout.DetailWidth-layout.HFrame, layout.ContentHeight)
 }
 
 // Update handles messages.
@@ -117,6 +122,11 @@ func (p *ReposPanel) View() string {
 // DetailView returns the detail pane.
 func (p *ReposPanel) DetailView() string {
 	return p.detail.View()
+}
+
+// HasActiveOverlay returns true when a modal overlay is open.
+func (p *ReposPanel) HasActiveOverlay() bool {
+	return false
 }
 
 // HelpKeys returns context keybindings.

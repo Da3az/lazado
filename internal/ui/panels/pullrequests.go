@@ -20,6 +20,7 @@ type prKeys struct {
 	Complete key.Binding
 	Checkout key.Binding
 	Browser  key.Binding
+	Filter   key.Binding
 	Toggle   key.Binding
 }
 
@@ -29,8 +30,11 @@ var prKeyMap = prKeys{
 	Complete: key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge")),
 	Checkout: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "checkout")),
 	Browser:  key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "open in browser")),
-	Toggle:   key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "my PRs / repo PRs")),
+	Filter:   key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter status")),
+	Toggle:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "my PRs / repo")),
 }
+
+var prStatusFilters = []string{"active", "completed", "abandoned", "all"}
 
 // PullRequestsPanel manages the pull requests view.
 type PullRequestsPanel struct {
@@ -45,16 +49,24 @@ type PullRequestsPanel struct {
 	height  int
 	myPRs   bool // true = show my PRs across repos, false = current repo PRs
 
+	statusFilterIdx int // index into prStatusFilters
+
 	form    *components.Form
 	confirm *components.Confirm
 }
 
 // NewPullRequestsPanel creates the PR panel.
 func NewPullRequestsPanel(client *api.Client, g *gitpkg.Git) *PullRequestsPanel {
+	list := components.NewList("Pull Requests")
+	list.SetColumns([]components.ColumnDef{
+		{Field: "ID", MinWidth: 10},
+		{Field: "Subtitle", MinWidth: 50},
+		{Field: "Title", Flex: true},
+	})
 	return &PullRequestsPanel{
 		client: client,
 		git:    g,
-		list:   components.NewList("Pull Requests"),
+		list:   list,
 		detail: components.NewDetailView(),
 	}
 }
@@ -80,8 +92,8 @@ func (p *PullRequestsPanel) SetSize(w, h int) {
 	p.width = w
 	p.height = h
 	layout := ui.CalculateLayout(w, h)
-	p.list.SetSize(layout.ListWidth-2, layout.ContentHeight)
-	p.detail.SetSize(layout.DetailWidth-2, layout.ContentHeight)
+	p.list.SetSize(layout.ListWidth-layout.HFrame, layout.ContentHeight)
+	p.detail.SetSize(layout.DetailWidth-layout.HFrame, layout.ContentHeight)
 }
 
 // Update handles messages.
@@ -148,6 +160,10 @@ func (p *PullRequestsPanel) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+func (p *PullRequestsPanel) currentStatusFilter() string {
+	return prStatusFilters[p.statusFilterIdx]
+}
+
 func (p *PullRequestsPanel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if !p.focused {
 		return nil
@@ -164,9 +180,18 @@ func (p *PullRequestsPanel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return p.checkoutBranch()
 	case key.Matches(msg, prKeyMap.Browser):
 		return p.openInBrowser()
+	case key.Matches(msg, prKeyMap.Filter):
+		return p.cycleStatusFilter()
 	case key.Matches(msg, prKeyMap.Toggle):
 		p.myPRs = !p.myPRs
-		return p.loadPRs()
+		scope := "My PRs"
+		if !p.myPRs {
+			scope = "Repo PRs"
+		}
+		return tea.Batch(
+			statusCmd("Scope: "+scope, false),
+			p.loadPRs(),
+		)
 	case key.Matches(msg, ui.Keys.Refresh):
 		return p.loadPRs()
 	}
@@ -192,12 +217,27 @@ func (p *PullRequestsPanel) DetailView() string {
 	return p.detail.View()
 }
 
+// HasActiveOverlay returns true when a form or confirm dialog is open.
+func (p *PullRequestsPanel) HasActiveOverlay() bool {
+	return p.form != nil || p.confirm != nil
+}
+
 // HelpKeys returns context-sensitive keybindings.
 func (p *PullRequestsPanel) HelpKeys() []key.Binding {
 	return []key.Binding{
 		prKeyMap.Create, prKeyMap.Approve, prKeyMap.Complete,
-		prKeyMap.Checkout, prKeyMap.Toggle, prKeyMap.Browser,
+		prKeyMap.Checkout, prKeyMap.Filter, prKeyMap.Toggle, prKeyMap.Browser,
 	}
+}
+
+// --- Filter ---
+
+func (p *PullRequestsPanel) cycleStatusFilter() tea.Cmd {
+	p.statusFilterIdx = (p.statusFilterIdx + 1) % len(prStatusFilters)
+	return tea.Batch(
+		statusCmd("Status: "+p.currentStatusFilter(), false),
+		p.loadPRs(),
+	)
 }
 
 // --- Data loading ---
@@ -207,8 +247,9 @@ func (p *PullRequestsPanel) loadPRs() tea.Cmd {
 	client := p.client
 	repoID := p.repoID
 	myPRs := p.myPRs
+	status := p.currentStatusFilter()
 	return func() tea.Msg {
-		opts := api.PRListOptions{Status: "active"}
+		opts := api.PRListOptions{Status: status}
 		if myPRs {
 			opts.CreatorID = client.UserID()
 		} else {
@@ -226,7 +267,7 @@ func (p *PullRequestsPanel) toListItems(prs []api.PullRequest) []components.List
 		result[i] = components.ListItem{
 			ID:       fmt.Sprintf("#%d", pr.PullRequestID),
 			Title:    pr.Title,
-			Subtitle: utils.Truncate(subtitle, 30),
+			Subtitle: utils.Truncate(subtitle, 48),
 		}
 	}
 	return result
