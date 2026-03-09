@@ -90,6 +90,11 @@ var (
 	HelpDescStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 
+	HelpOverlayStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("39")).
+				Padding(1, 2)
+
 	// Titles
 	TitleStyle = lipgloss.NewStyle().
 			Bold(true).

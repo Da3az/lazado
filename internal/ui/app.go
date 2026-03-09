@@ -124,15 +124,22 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *AppModel) handleGlobalKey(msg tea.KeyMsg) tea.Cmd {
+	// When help overlay is open, only allow closing it
+	if m.showHelp {
+		switch {
+		case key.Matches(msg, Keys.Help), key.Matches(msg, Keys.Back):
+			m.showHelp = false
+		case key.Matches(msg, Keys.Quit):
+			m.showHelp = false
+		}
+		return nil
+	}
+
 	switch {
 	case key.Matches(msg, Keys.Quit):
-		if m.showHelp {
-			m.showHelp = false
-			return nil
-		}
 		return tea.Quit
 	case key.Matches(msg, Keys.Help):
-		m.showHelp = !m.showHelp
+		m.showHelp = true
 		return nil
 	case key.Matches(msg, Keys.Panel1):
 		return m.switchPanel(PanelWorkItems)
@@ -177,10 +184,6 @@ func (m *AppModel) View() string {
 		return "Loading..."
 	}
 
-	if m.showHelp {
-		return m.renderHelp()
-	}
-
 	var sections []string
 
 	// Tab bar
@@ -216,7 +219,20 @@ func (m *AppModel) View() string {
 	// Status bar
 	sections = append(sections, m.renderStatusBar())
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	base := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	if m.showHelp {
+		overlay := m.renderHelp()
+		base = lipgloss.Place(
+			m.layout.Width, m.layout.Height,
+			lipgloss.Center, lipgloss.Center,
+			overlay,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		)
+	}
+
+	return base
 }
 
 func (m *AppModel) renderTabBar() string {
@@ -248,12 +264,13 @@ func (m *AppModel) renderStatusBar() string {
 		left += "  │  " + m.statusBar.branch
 	}
 
-	right := " ? help "
+	helpHint := StatusKeyStyle.Render("?") + " help "
+	right := helpHint
 	if m.statusBar.message != "" {
 		if m.statusBar.isError {
-			right = " " + ErrorStyle.Render(m.statusBar.message) + " "
+			right = " " + ErrorStyle.Render(m.statusBar.message) + "  " + helpHint
 		} else {
-			right = " " + SuccessStyle.Render(m.statusBar.message) + " "
+			right = " " + SuccessStyle.Render(m.statusBar.message) + "  " + helpHint
 		}
 	}
 
@@ -307,7 +324,7 @@ func (m *AppModel) renderHelp() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(DimStyle.Render("Press ? to close"))
+	b.WriteString(DimStyle.Render("Press ? or esc to close"))
 
-	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+	return HelpOverlayStyle.Render(b.String())
 }
