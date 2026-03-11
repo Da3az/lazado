@@ -17,25 +17,37 @@ func (c *Client) GetWorkItem(ctx context.Context, id int) (*WorkItem, error) {
 }
 
 // GetWorkItems fetches multiple work items by their IDs.
+// Batches requests in chunks of 50 to avoid URL length limits.
 func (c *Client) GetWorkItems(ctx context.Context, ids []int) ([]WorkItem, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 
-	// API supports up to 200 IDs per request
-	idStrs := make([]string, len(ids))
-	for i, id := range ids {
-		idStrs[i] = fmt.Sprintf("%d", id)
-	}
-	url := c.projectURL(fmt.Sprintf("_apis/wit/workitems?ids=%s&$expand=all", strings.Join(idStrs, ",")))
+	const batchSize = 50
+	var all []WorkItem
 
-	var result struct {
-		Value []WorkItem `json:"value"`
+	for i := 0; i < len(ids); i += batchSize {
+		end := i + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[i:end]
+
+		idStrs := make([]string, len(batch))
+		for j, id := range batch {
+			idStrs[j] = fmt.Sprintf("%d", id)
+		}
+		url := c.projectURL(fmt.Sprintf("_apis/wit/workitems?ids=%s&$expand=all", strings.Join(idStrs, ",")))
+
+		var result struct {
+			Value []WorkItem `json:"value"`
+		}
+		if err := c.get(ctx, url, &result); err != nil {
+			return nil, err
+		}
+		all = append(all, result.Value...)
 	}
-	if err := c.get(ctx, url, &result); err != nil {
-		return nil, err
-	}
-	return result.Value, nil
+	return all, nil
 }
 
 // QueryWorkItems executes a WIQL query and returns the matching work items.

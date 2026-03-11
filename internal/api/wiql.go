@@ -11,6 +11,7 @@ type WIQL struct {
 	from    string
 	where   string
 	orderBy []string
+	top     int
 }
 
 // NewWIQL creates a new WIQL query builder.
@@ -32,6 +33,12 @@ func (q *WIQL) Where(clause string) *WIQL {
 	return q
 }
 
+// Top limits the number of results returned.
+func (q *WIQL) Top(n int) *WIQL {
+	q.top = n
+	return q
+}
+
 // OrderByDesc adds an ORDER BY ... DESC clause.
 func (q *WIQL) OrderByDesc(field string) *WIQL {
 	q.orderBy = append(q.orderBy, fmt.Sprintf("[%s] DESC", field))
@@ -48,6 +55,9 @@ func (q *WIQL) OrderByAsc(field string) *WIQL {
 func (q *WIQL) Build() string {
 	var b strings.Builder
 	b.WriteString("SELECT ")
+	if q.top > 0 {
+		b.WriteString(fmt.Sprintf("TOP %d ", q.top))
+	}
 	if len(q.fields) > 0 {
 		quoted := make([]string, len(q.fields))
 		for i, f := range q.fields {

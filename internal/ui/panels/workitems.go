@@ -422,7 +422,8 @@ func buildQuery(stateFilter, typeFilter string, myItems bool, searchQuery string
 	}
 
 	q := api.NewWIQL().
-		Select("System.Id", "System.Title", "System.State", "System.WorkItemType", "System.AssignedTo")
+		Select("System.Id", "System.Title", "System.State", "System.WorkItemType", "System.AssignedTo").
+		Top(200)
 
 	if len(conditions) > 0 {
 		q = q.Where(api.And(conditions...))
