@@ -129,6 +129,11 @@ func (p *PipelinesPanel) DetailView() string {
 	return p.detail.View()
 }
 
+// OverlayView returns the overlay content or empty string.
+func (p *PipelinesPanel) OverlayView() string {
+	return ""
+}
+
 // HasActiveOverlay returns true when a modal overlay is open.
 func (p *PipelinesPanel) HasActiveOverlay() bool {
 	return false

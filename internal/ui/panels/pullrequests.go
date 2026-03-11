@@ -201,20 +201,25 @@ func (p *PullRequestsPanel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-// View renders the panel.
+// View renders the panel (list only — overlays are rendered via OverlayView).
 func (p *PullRequestsPanel) View() string {
-	if p.form != nil {
-		return p.form.View()
-	}
-	if p.confirm != nil {
-		return p.confirm.View()
-	}
 	return p.list.View()
 }
 
 // DetailView returns the detail pane.
 func (p *PullRequestsPanel) DetailView() string {
 	return p.detail.View()
+}
+
+// OverlayView returns the overlay content (form/confirm) or empty string.
+func (p *PullRequestsPanel) OverlayView() string {
+	if p.form != nil {
+		return p.form.View()
+	}
+	if p.confirm != nil {
+		return p.confirm.View()
+	}
+	return ""
 }
 
 // HasActiveOverlay returns true when a form or confirm dialog is open.

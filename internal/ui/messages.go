@@ -83,6 +83,37 @@ type PipelineTriggeredMsg struct {
 	Err error
 }
 
+// Metadata loaded messages
+
+type TeamMembersLoadedMsg struct {
+	Members []string
+	Err     error
+}
+
+type AreaPathsLoadedMsg struct {
+	Paths []string
+	Err   error
+}
+
+type IterationsLoadedMsg struct {
+	Paths []string
+	Err   error
+}
+
+// Comments messages
+
+type CommentsLoadedMsg struct {
+	WIID     int
+	Comments []api.Comment
+	Err      error
+}
+
+type CommentAddedMsg struct {
+	WIID    int
+	Comment *api.Comment
+	Err     error
+}
+
 // StatusMsg displays a temporary message in the status bar.
 type StatusMsg struct {
 	Text    string

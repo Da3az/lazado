@@ -14,6 +14,7 @@ type Panel interface {
 	Update(msg tea.Msg) tea.Cmd
 	View() string
 	DetailView() string
+	OverlayView() string // returns overlay content (form/confirm) or "" if none
 	HelpKeys() []key.Binding
 	HasActiveOverlay() bool
 	SetFocused(bool)
@@ -227,6 +228,19 @@ func (m *AppModel) View() string {
 	sections = append(sections, m.renderStatusBar())
 
 	base := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	// Panel overlays (form/confirm) render centered on top of everything
+	if panel, ok := m.panels[m.activePanel]; ok {
+		if overlay := panel.OverlayView(); overlay != "" {
+			base = lipgloss.Place(
+				m.layout.Width, m.layout.Height,
+				lipgloss.Center, lipgloss.Center,
+				overlay,
+				lipgloss.WithWhitespaceChars(" "),
+				lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+			)
+		}
+	}
 
 	if m.showHelp {
 		overlay := m.renderHelp()

@@ -124,6 +124,11 @@ func (p *ReposPanel) DetailView() string {
 	return p.detail.View()
 }
 
+// OverlayView returns the overlay content or empty string.
+func (p *ReposPanel) OverlayView() string {
+	return ""
+}
+
 // HasActiveOverlay returns true when a modal overlay is open.
 func (p *ReposPanel) HasActiveOverlay() bool {
 	return false

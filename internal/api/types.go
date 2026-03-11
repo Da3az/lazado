@@ -176,6 +176,16 @@ type WorkItemTypeState struct {
 	Color    string `json:"color"`
 }
 
+// Comment represents a work item comment.
+type Comment struct {
+	ID           int         `json:"id"`
+	Text         string      `json:"text"`
+	CreatedBy    IdentityRef `json:"createdBy"`
+	CreatedDate  time.Time   `json:"createdDate"`
+	ModifiedBy   IdentityRef `json:"modifiedBy"`
+	ModifiedDate time.Time   `json:"modifiedDate"`
+}
+
 // PatchOperation is a JSON Patch operation for work item updates.
 type PatchOperation struct {
 	Op    string      `json:"op"`

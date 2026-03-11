@@ -21,6 +21,7 @@ type wiKeys struct {
 	Edit        key.Binding
 	Assign      key.Binding
 	Unassign    key.Binding
+	Comment     key.Binding
 	Branch      key.Binding
 	Browser     key.Binding
 	Filter      key.Binding
@@ -34,6 +35,7 @@ var wiKeyMap = wiKeys{
 	Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 	Assign:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "assign to me")),
 	Unassign:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unassign")),
+	Comment:     key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "add comment")),
 	Branch:      key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "create branch")),
 	Browser:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "open in browser")),
 	Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter state")),
@@ -64,6 +66,15 @@ type WorkItemsPanel struct {
 	// Search
 	searchQuery string
 
+	// Metadata for form pickers
+	teamMembers []string
+	areaPaths   []string
+	iterations  []string
+
+	// Comments
+	comments       []api.Comment
+	commentsLoaded int // work item ID for which comments are loaded
+
 	// Overlay state
 	form    *components.Form
 	confirm *components.Confirm
@@ -86,13 +97,19 @@ func NewWorkItemsPanel(client *api.Client) *WorkItemsPanel {
 		stateFilters:  defaultStateFilters,
 		stateFilterIdx: 0, // "All" initially — but will load on first refresh
 		wiTypes:       []string{"Task", "User Story", "Bug", "Epic", "Feature"},
-		myItems:       true,
+		myItems:       false,
 	}
 }
 
 // Init loads initial data.
 func (p *WorkItemsPanel) Init() tea.Cmd {
-	return tea.Batch(p.loadItems(), p.loadStates())
+	return tea.Batch(
+		p.loadItems(),
+		p.loadStates(),
+		p.loadTeamMembers(),
+		p.loadAreaPaths(),
+		p.loadIterations(),
+	)
 }
 
 // SetFocused sets panel focus state.
@@ -133,6 +150,10 @@ func (p *WorkItemsPanel) Update(msg tea.Msg) tea.Cmd {
 		p.items = msg.Items
 		p.list.SetItems(p.toListItems(msg.Items))
 		p.updateDetail()
+		// Load comments for the first selected item
+		if idx := p.list.SelectedIndex(); idx >= 0 && idx < len(p.items) {
+			return p.loadComments(p.items[idx].ID)
+		}
 		return nil
 
 	case ui.StatesLoadedMsg:
@@ -149,6 +170,41 @@ func (p *WorkItemsPanel) Update(msg tea.Msg) tea.Cmd {
 			p.stateFilters = states
 		}
 		return nil
+
+	case ui.TeamMembersLoadedMsg:
+		if msg.Err == nil {
+			p.teamMembers = msg.Members
+		}
+		return nil
+
+	case ui.AreaPathsLoadedMsg:
+		if msg.Err == nil {
+			p.areaPaths = msg.Paths
+		}
+		return nil
+
+	case ui.IterationsLoadedMsg:
+		if msg.Err == nil {
+			p.iterations = msg.Paths
+		}
+		return nil
+
+	case ui.CommentsLoadedMsg:
+		if msg.Err == nil {
+			p.comments = msg.Comments
+			p.commentsLoaded = msg.WIID
+			p.updateDetail()
+		}
+		return nil
+
+	case ui.CommentAddedMsg:
+		if msg.Err != nil {
+			return statusCmd("Failed to add comment: "+msg.Err.Error(), true)
+		}
+		return tea.Batch(
+			statusCmd("Comment added", false),
+			p.loadComments(msg.WIID),
+		)
 
 	case ui.WorkItemUpdatedMsg:
 		if msg.Err != nil {
@@ -217,6 +273,8 @@ func (p *WorkItemsPanel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return p.assignToMe()
 	case key.Matches(msg, wiKeyMap.Unassign):
 		return p.unassign()
+	case key.Matches(msg, wiKeyMap.Comment):
+		return p.showCommentForm()
 	case key.Matches(msg, wiKeyMap.Browser):
 		return p.openInBrowser()
 	case key.Matches(msg, wiKeyMap.Filter):
@@ -233,20 +291,19 @@ func (p *WorkItemsPanel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	// List navigation
+	prevIdx := p.list.SelectedIndex()
 	cmd := p.list.Update(msg)
 	p.updateDetail()
+	// Load comments if selection changed
+	newIdx := p.list.SelectedIndex()
+	if newIdx >= 0 && newIdx < len(p.items) && newIdx != prevIdx {
+		return tea.Batch(cmd, p.loadComments(p.items[newIdx].ID))
+	}
 	return cmd
 }
 
-// View renders the panel.
+// View renders the panel (list only — overlays are rendered via OverlayView).
 func (p *WorkItemsPanel) View() string {
-	// If overlay is active, render it centered
-	if p.form != nil {
-		return p.form.View()
-	}
-	if p.confirm != nil {
-		return p.confirm.View()
-	}
 	if p.search.Active() {
 		return p.search.View() + "\n" + p.list.View()
 	}
@@ -258,6 +315,17 @@ func (p *WorkItemsPanel) DetailView() string {
 	return p.detail.View()
 }
 
+// OverlayView returns the overlay content (form/confirm) or empty string.
+func (p *WorkItemsPanel) OverlayView() string {
+	if p.form != nil {
+		return p.form.View()
+	}
+	if p.confirm != nil {
+		return p.confirm.View()
+	}
+	return ""
+}
+
 // HasActiveOverlay returns true when a form, confirm, or search is open.
 func (p *WorkItemsPanel) HasActiveOverlay() bool {
 	return p.form != nil || p.confirm != nil || p.search.Active()
@@ -267,8 +335,8 @@ func (p *WorkItemsPanel) HasActiveOverlay() bool {
 func (p *WorkItemsPanel) HelpKeys() []key.Binding {
 	return []key.Binding{
 		wiKeyMap.Create, wiKeyMap.ChangeState, wiKeyMap.Edit,
-		wiKeyMap.Assign, wiKeyMap.Filter, wiKeyMap.TypeFilter,
-		wiKeyMap.ToggleMine, wiKeyMap.Browser,
+		wiKeyMap.Assign, wiKeyMap.Comment, wiKeyMap.Filter,
+		wiKeyMap.TypeFilter, wiKeyMap.ToggleMine, wiKeyMap.Browser,
 	}
 }
 
@@ -381,9 +449,25 @@ func (p *WorkItemsPanel) updateDetail() {
 	idx := p.list.SelectedIndex()
 	if idx < 0 || idx >= len(p.items) {
 		p.detail.Clear()
+		p.comments = nil
 		return
 	}
 	wi := p.items[idx]
+
+	// Build body with description and comments
+	bodyText := utils.StripHTML(wi.Description())
+	if p.commentsLoaded == wi.ID && len(p.comments) > 0 {
+		var parts []string
+		for _, c := range p.comments {
+			header := fmt.Sprintf("%s (%s):",
+				c.CreatedBy.DisplayName,
+				c.CreatedDate.Format("Jan 2 15:04"))
+			body := utils.StripHTML(c.Text)
+			parts = append(parts, header+"\n"+body)
+		}
+		bodyText += "\n\n--- Comments ---\n\n" + strings.Join(parts, "\n---\n")
+	}
+
 	p.detail.SetContent(
 		fmt.Sprintf("Work Item #%d", wi.ID),
 		[]components.DetailField{
@@ -395,7 +479,7 @@ func (p *WorkItemsPanel) updateDetail() {
 			{Label: "Iteration", Value: wi.IterationPath()},
 			{Label: "Tags", Value: wi.Tags()},
 		},
-		utils.StripHTML(wi.Description()),
+		bodyText,
 	)
 }
 
@@ -451,7 +535,7 @@ func (p *WorkItemsPanel) toggleMyItems() tea.Cmd {
 func (p *WorkItemsPanel) showCreateForm() tea.Cmd {
 	p.form = components.NewForm("create-wi", "Create Work Item", []components.FormField{
 		{Label: "Title", Placeholder: "Enter title..."},
-		{Label: "Type", Placeholder: "Task", Value: "Task"},
+		{Label: "Type", Value: "Task", Options: p.wiTypes},
 		{Label: "Description", Placeholder: "Enter description (optional)..."},
 	})
 	p.form.SetSize(p.width, p.height)
@@ -465,18 +549,18 @@ func (p *WorkItemsPanel) showEditForm() tea.Cmd {
 	}
 	wi := p.items[idx]
 
-	// Build available states hint
-	statesHint := ""
+	// Build state options from loaded states (skip "All")
+	var stateOptions []string
 	if len(p.stateFilters) > 1 {
-		statesHint = strings.Join(p.stateFilters[1:], ", ") // skip "All"
+		stateOptions = p.stateFilters[1:]
 	}
 
 	p.form = components.NewForm("edit-wi", fmt.Sprintf("Edit #%d", wi.ID), []components.FormField{
 		{Label: "Title", Value: wi.Title()},
-		{Label: "State", Value: wi.State(), Placeholder: statesHint},
-		{Label: "Assigned To", Value: wi.AssignedTo()},
-		{Label: "Area Path", Value: wi.AreaPath()},
-		{Label: "Iteration", Value: wi.IterationPath()},
+		{Label: "State", Value: wi.State(), Options: stateOptions},
+		{Label: "Assigned To", Value: wi.AssignedTo(), Options: p.teamMembers},
+		{Label: "Area Path", Value: wi.AreaPath(), Options: p.areaPaths},
+		{Label: "Iteration", Value: wi.IterationPath(), Options: p.iterations},
 		{Label: "Tags", Value: wi.Tags()},
 		{Label: "Description", Value: utils.StripHTML(wi.Description())},
 	})
@@ -491,13 +575,13 @@ func (p *WorkItemsPanel) showStateForm() tea.Cmd {
 	}
 	wi := p.items[idx]
 
-	statesHint := ""
+	var stateOptions []string
 	if len(p.stateFilters) > 1 {
-		statesHint = strings.Join(p.stateFilters[1:], ", ")
+		stateOptions = p.stateFilters[1:]
 	}
 
 	p.form = components.NewForm("state-wi", fmt.Sprintf("Change State for #%d", wi.ID), []components.FormField{
-		{Label: "State", Placeholder: statesHint, Value: wi.State()},
+		{Label: "State", Value: wi.State(), Options: stateOptions},
 	})
 	p.form.SetSize(p.width, p.height)
 	return nil
@@ -553,6 +637,22 @@ func (p *WorkItemsPanel) handleFormSubmit(msg components.FormSubmitMsg) tea.Cmd 
 			}
 			item, err := client.UpdateWorkItem(context.Background(), wi.ID, ops)
 			return ui.WorkItemUpdatedMsg{Item: item, Err: err}
+		}
+
+	case "comment-wi":
+		idx := p.list.SelectedIndex()
+		if idx < 0 || idx >= len(p.items) {
+			return nil
+		}
+		wi := p.items[idx]
+		text := msg.Values["Comment"]
+		if text == "" {
+			return statusCmd("Comment text is required", true)
+		}
+		wiID := wi.ID
+		return func() tea.Msg {
+			comment, err := client.AddWorkItemComment(context.Background(), wiID, text)
+			return ui.CommentAddedMsg{WIID: wiID, Comment: comment, Err: err}
 		}
 	}
 
@@ -643,6 +743,51 @@ func (p *WorkItemsPanel) openInBrowser() tea.Cmd {
 	url := fmt.Sprintf("%s/%s/_workitems/edit/%d", p.client.BaseURL(), p.client.Project(), wi.ID)
 	utils.OpenBrowser(url, "")
 	return nil
+}
+
+func (p *WorkItemsPanel) showCommentForm() tea.Cmd {
+	idx := p.list.SelectedIndex()
+	if idx < 0 || idx >= len(p.items) {
+		return nil
+	}
+	wi := p.items[idx]
+	p.form = components.NewForm("comment-wi", fmt.Sprintf("Comment on #%d", wi.ID), []components.FormField{
+		{Label: "Comment", Placeholder: "Enter your comment..."},
+	})
+	p.form.SetSize(p.width, p.height)
+	return nil
+}
+
+func (p *WorkItemsPanel) loadComments(wiID int) tea.Cmd {
+	client := p.client
+	return func() tea.Msg {
+		comments, err := client.GetWorkItemComments(context.Background(), wiID)
+		return ui.CommentsLoadedMsg{WIID: wiID, Comments: comments, Err: err}
+	}
+}
+
+func (p *WorkItemsPanel) loadTeamMembers() tea.Cmd {
+	client := p.client
+	return func() tea.Msg {
+		members, err := client.GetTeamMembers(context.Background())
+		return ui.TeamMembersLoadedMsg{Members: members, Err: err}
+	}
+}
+
+func (p *WorkItemsPanel) loadAreaPaths() tea.Cmd {
+	client := p.client
+	return func() tea.Msg {
+		paths, err := client.GetAreaPaths(context.Background())
+		return ui.AreaPathsLoadedMsg{Paths: paths, Err: err}
+	}
+}
+
+func (p *WorkItemsPanel) loadIterations() tea.Cmd {
+	client := p.client
+	return func() tea.Msg {
+		paths, err := client.GetIterationPaths(context.Background())
+		return ui.IterationsLoadedMsg{Paths: paths, Err: err}
+	}
 }
 
 func (p *WorkItemsPanel) updateForm(msg tea.Msg) tea.Cmd {
