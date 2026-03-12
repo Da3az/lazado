@@ -712,7 +712,7 @@ func (p *WorkItemsPanel) assignToMe() tea.Cmd {
 	client := p.client
 	return func() tea.Msg {
 		ops := []api.PatchOperation{
-			{Op: "replace", Path: "/fields/System.AssignedTo", Value: "@Me"},
+			{Op: "replace", Path: "/fields/System.AssignedTo", Value: client.UserDisplayName()},
 		}
 		item, err := client.UpdateWorkItem(context.Background(), wi.ID, ops)
 		return ui.WorkItemUpdatedMsg{Item: item, Err: err}

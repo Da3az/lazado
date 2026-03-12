@@ -44,7 +44,7 @@ func Run() error {
 		fmt.Fprintln(os.Stderr, "Check your PAT and org URL.")
 		os.Exit(1)
 	}
-	client.SetUserID(conn.AuthenticatedUser.ID)
+	client.SetUser(conn.AuthenticatedUser.ID, conn.AuthenticatedUser.DisplayName)
 
 	g := gitpkg.New()
 	branch, _ := g.CurrentBranch()

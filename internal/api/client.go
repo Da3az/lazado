@@ -16,11 +16,12 @@ import (
 
 // Client communicates with the Azure DevOps REST API.
 type Client struct {
-	httpClient *http.Client
-	baseURL    string // e.g. "https://dev.azure.com/MyOrg"
-	project    string
-	auth       auth.Provider
-	userID     string // cached authenticated user ID
+	httpClient  *http.Client
+	baseURL     string // e.g. "https://dev.azure.com/MyOrg"
+	project     string
+	auth        auth.Provider
+	userID      string // cached authenticated user ID
+	userDisplay string // cached display name for assignment
 }
 
 // NewClient creates an API client for the given organization and project.
@@ -33,14 +34,20 @@ func NewClient(baseURL, project string, authProvider auth.Provider) *Client {
 	}
 }
 
-// SetUserID sets the cached user ID (obtained during init/connection validation).
-func (c *Client) SetUserID(id string) {
+// SetUser sets the cached user identity (obtained during init/connection validation).
+func (c *Client) SetUser(id, displayName string) {
 	c.userID = id
+	c.userDisplay = displayName
 }
 
 // UserID returns the cached authenticated user ID.
 func (c *Client) UserID() string {
 	return c.userID
+}
+
+// UserDisplayName returns the cached authenticated user display name.
+func (c *Client) UserDisplayName() string {
+	return c.userDisplay
 }
 
 // BaseURL returns the base organization URL.
