@@ -30,6 +30,7 @@ type AppModel struct {
 	layout      Layout
 	showHelp    bool
 	ready       bool
+	initialized map[PanelID]bool // tracks which panels have been Init()'d
 }
 
 // TabBar wraps the tab bar component reference (defined here to avoid circular import).
@@ -66,20 +67,19 @@ func NewAppModel(panels map[PanelID]Panel, org, project, branch string) *AppMode
 			project: project,
 			branch:  branch,
 		},
+		initialized: make(map[PanelID]bool),
 	}
 }
 
-// Init initializes all panels.
+// Init initializes only the active panel (lazy init — others init on first switch).
 func (m *AppModel) Init() tea.Cmd {
-	var cmds []tea.Cmd
-	for _, panel := range m.panels {
-		cmds = append(cmds, panel.Init())
-	}
-	// Focus the active panel
+	// Focus and init only the active panel
 	if p, ok := m.panels[m.activePanel]; ok {
 		p.SetFocused(true)
+		m.initialized[m.activePanel] = true
+		return p.Init()
 	}
-	return tea.Batch(cmds...)
+	return nil
 }
 
 // Update handles messages.
@@ -124,12 +124,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
-		// Delegate non-key messages to all panels
-		var cmds []tea.Cmd
-		for _, panel := range m.panels {
-			cmds = append(cmds, panel.Update(msg))
+		// Only delegate non-key messages to the active panel
+		if panel, ok := m.panels[m.activePanel]; ok {
+			return m, panel.Update(msg)
 		}
-		return m, tea.Batch(cmds...)
 	}
 
 	return m, nil
@@ -187,6 +185,14 @@ func (m *AppModel) switchPanel(id PanelID) tea.Cmd {
 	}
 	// Clear status message on panel switch
 	m.statusBar.message = ""
+
+	// Lazy init: if this panel hasn't been initialized yet, do it now
+	if !m.initialized[id] {
+		m.initialized[id] = true
+		if p, ok := m.panels[id]; ok {
+			return p.Init()
+		}
+	}
 	return nil
 }
 
@@ -228,6 +234,12 @@ func (m *AppModel) View() string {
 	sections = append(sections, m.renderStatusBar())
 
 	base := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	// Ensure output fits terminal height exactly
+	base = lipgloss.NewStyle().
+		MaxHeight(m.layout.Height).
+		MaxWidth(m.layout.Width).
+		Render(base)
 
 	// Panel overlays (form/confirm) render centered on top of everything
 	if panel, ok := m.panels[m.activePanel]; ok {
