@@ -52,11 +52,19 @@ func (c *Client) GetWorkItems(ctx context.Context, ids []int) ([]WorkItem, error
 
 // QueryWorkItems executes a WIQL query and returns the matching work items.
 func (c *Client) QueryWorkItems(ctx context.Context, wiql string) ([]WorkItem, error) {
-	url := c.projectURL("_apis/wit/wiql")
+	return c.QueryWorkItemsTop(ctx, wiql, 0)
+}
+
+// QueryWorkItemsTop executes a WIQL query with a result limit.
+func (c *Client) QueryWorkItemsTop(ctx context.Context, wiql string, top int) ([]WorkItem, error) {
+	u := c.projectURL("_apis/wit/wiql")
+	if top > 0 {
+		u += fmt.Sprintf("?$top=%d", top)
+	}
 	body := map[string]string{"query": wiql}
 
 	var result WIQLResult
-	if err := c.post(ctx, url, body, &result); err != nil {
+	if err := c.post(ctx, u, body, &result); err != nil {
 		return nil, err
 	}
 

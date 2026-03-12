@@ -383,8 +383,8 @@ func (p *WorkItemsPanel) loadItems() tea.Cmd {
 	tf := p.typeFilter
 	myItems := p.myItems
 	return func() tea.Msg {
-		wiql := buildQuery(sf, tf, myItems, "")
-		items, err := client.QueryWorkItems(context.Background(), wiql)
+		q := buildWIQL(sf, tf, myItems, "")
+		items, err := client.QueryWorkItemsTop(context.Background(), q.Build(), q.TopValue())
 		return ui.WorkItemsLoadedMsg{Items: items, Err: err}
 	}
 }
@@ -396,13 +396,13 @@ func (p *WorkItemsPanel) searchItems(query string) tea.Cmd {
 	tf := p.typeFilter
 	myItems := p.myItems
 	return func() tea.Msg {
-		wiql := buildQuery(sf, tf, myItems, query)
-		items, err := client.QueryWorkItems(context.Background(), wiql)
+		q := buildWIQL(sf, tf, myItems, query)
+		items, err := client.QueryWorkItemsTop(context.Background(), q.Build(), q.TopValue())
 		return ui.WorkItemsLoadedMsg{Items: items, Err: err}
 	}
 }
 
-func buildQuery(stateFilter, typeFilter string, myItems bool, searchQuery string) string {
+func buildWIQL(stateFilter, typeFilter string, myItems bool, searchQuery string) *api.WIQL {
 	var conditions []string
 
 	if myItems {
@@ -429,7 +429,7 @@ func buildQuery(stateFilter, typeFilter string, myItems bool, searchQuery string
 		q = q.Where(api.And(conditions...))
 	}
 
-	return q.OrderByDesc("System.CreatedDate").Build()
+	return q.OrderByDesc("System.CreatedDate")
 }
 
 // --- Conversions ---

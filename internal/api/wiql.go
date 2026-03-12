@@ -51,13 +51,15 @@ func (q *WIQL) OrderByAsc(field string) *WIQL {
 	return q
 }
 
+// TopValue returns the configured TOP limit (0 means no limit).
+func (q *WIQL) TopValue() int {
+	return q.top
+}
+
 // Build constructs the WIQL query string.
 func (q *WIQL) Build() string {
 	var b strings.Builder
 	b.WriteString("SELECT ")
-	if q.top > 0 {
-		b.WriteString(fmt.Sprintf("TOP %d ", q.top))
-	}
 	if len(q.fields) > 0 {
 		quoted := make([]string, len(q.fields))
 		for i, f := range q.fields {
